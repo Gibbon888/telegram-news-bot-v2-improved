@@ -1,0 +1,106 @@
+name: Telegram News Bot
+
+on:
+  schedule:
+    - cron: '0,30 7-22 * * *'
+      timezone: "Asia/Baku"
+
+  workflow_dispatch:
+    inputs:
+      seed_only:
+        description: "Первичная загрузка истории без публикации"
+        required: true
+        type: boolean
+        default: false
+      debug_html:
+        description: "Сохранить HTML одной статьи в артефакты для анализа селекторов"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: telegram-news-bot
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # 1. Получаем исходный код
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: source
+          fetch-depth: 0
+
+      # 2. Получаем отдельную ветку с базой
+      - name: Checkout database
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: bot-data
+          path: data
+          persist-credentials: true
+
+      # 3. Устанавливаем Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      # 4. Устанавливаем зависимости
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r source/requirements.txt
+
+      # 5. Выполняем программу
+      - name: Run Telegram News Bot
+        id: bot
+        continue-on-error: true
+        working-directory: source
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DB_PATH: ../data/state/news.sqlite
+          SEED_ONLY: ${{ inputs.seed_only }}
+          DEBUG_HTML_PATH: ${{ inputs.debug_html == true && '../debug_article.html' || '' }}
+        run: |
+          python -m bot.main
+
+      # 6. Загружаем HTML-дамп статьи в артефакты (если включен debug_html)
+      - name: Upload debug HTML artifact
+        if: always() && inputs.debug_html == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-article-html
+          path: debug_article.html
+          if-no-files-found: ignore
+          retention-days: 3
+
+      # 7. Сохраняем SQLite в ветке bot-data
+      - name: Save database
+        if: always()
+        run: |
+          git -C data config user.name "github-actions[bot]"
+          git -C data config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git -C data add state/news.sqlite
+
+          if ! git -C data diff --cached --quiet; then
+            git -C data commit -m "Update news database [skip ci]"
+            git -C data push origin bot-data
+          fi
+
+      # 8. Завершаем запуск с учётом ошибок бота
+      - name: Check bot result
+        if: always() && steps.bot.outcome == 'failure'
+        run: exit 1

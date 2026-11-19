@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+data/
+state/*.sqlite
+state/*.sqlite-journal
+debug_article.html
+.DS_Store
+Thumbs.db
